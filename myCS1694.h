@@ -29,8 +29,8 @@ typedef struct _segmentAddress {
 #define LOGO_DDD    10
 
 segmentAddress logos[] = {
-	{ 0x2, 0x80 }, // colon A
-	{ 0x4, 0x80 }, // colon B
+	{ 0x2, 0x40 }, // colon A
+	{ 0x4, 0x40 }, // colon B
 	{ 0x1, 0x02 }, // DVD
 	{ 0x3, 0x02 }, // VCD
 	{ 0x5, 0x02 }, // MP3
@@ -87,14 +87,14 @@ byte mapSegments[] = {
 	0b01100111, // p
 	0b01110011, // q
 	0b00000101, // r
-	0b01011010, // s
+	0b01011011, // s
 	0b00000111, // t
 	0b00011100, // u
 	0b00111110, // v
 	0b00111111, // w
 	0b00110111, // x
 	0b00111011, // y
-	0b01101100, // z
+	0b01101101, // z
 	0b00000000, // ' '
 	0b01100101, // ?
 	0b00000001, // -
