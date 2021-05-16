@@ -1,0 +1,4 @@
+BOARD := arduino:avr:uno
+PORT := /dev/ttyUSB0
+#LIBRARY_PATH := /path/to/library1 /path/to/library2
+ARDDUDE_OPTIONS := -l cr -o raw -d
