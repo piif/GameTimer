@@ -1,18 +1,30 @@
 #include "Arduino.h"
-
-#include "CS1694.h"
-#include "myCS1694.h"
+#include "notes.h"
 
 #ifndef DEFAULT_BAUDRATE
 	#define DEFAULT_BAUDRATE 115200
 #endif
 
-#define BIP_PIN 6
+#define TEST_MICRO
+//#define USE_COMPARATOR
+//#define USE_ADC_WITH_LOOP
+#define USE_ADC_WITH_INTERRUPT
+
+//#define MAIN_CODE
+
+#define writeReg16(reg, value) do { unsigned char sreg = SREG; cli(); reg=value; SREG = sreg; } while(0)
+#define readReg16(var, reg) do { unsigned char sreg = SREG; cli(); var=reg; SREG = sreg; } while(0)
+
+#define SPEAKER_PIN 11
+
+#ifdef MAIN_CODE
+#include "CS1694.h"
+#include "myCS1694.h"
 
 // TODO : read/write this value from eeprom
 int durationIndex = 1;
 
-int durations[] = {
+static const int durations[] PROGMEM = {
 	5, 10, 15, 20, 30, 45,
 	60, 120, 180, 240, 300, 360, 420, 480, 540, 600,
 	900, 1200, 1500, 1800
@@ -151,7 +163,7 @@ void setup() {
 	displayControl(DISPLAY_ON, 0x07);
 	sendSegments();
 
-	pinMode(BIP_PIN, OUTPUT);
+	pinMode(SPEAKER_PIN, OUTPUT);
 
 	Serial.println("setup ok");
 
@@ -185,23 +197,293 @@ void loop() {
 	if (newCount >= 0 && newCount != count) {
 		count = newCount;
 		if (count == alarm1 || count == alarm2) {
-			tone(BIP_PIN, 880, 50);
+			tone(SPEAKER_PIN, 880, 50);
 		} else if (count == 0) {
-			tone(BIP_PIN, 220, 500);
+			tone(SPEAKER_PIN, 220, 500);
 		}
 		displayTime(count);
 	}
+}
+#endif
 
-//	if (convertedKeys & 0x10) {
-//		rotate();
+#ifdef TEST_MICRO
+
+#include "setInterval.h"
+
+#ifdef USE_ADC_WITH_LOOP
+#define INPUT_LEN 512
+int inputs[INPUT_LEN] = { 0, };
+#endif
+
+#define BUTTON_NB 2
+static const byte buttonPins[] = { 2, 3 };
+static const byte buttonMsks[] = { 0x01, 0x02 };
+
+void setupButtons() {
+	for (byte i = 0; i < BUTTON_NB; i++) {
+		pinMode(buttonPins[i], INPUT_PULLUP);
+	}
+}
+byte buttonPressed = 0;
+
+byte readButtonState() {
+	byte newMask = 0;
+	for (byte i = 0; i < BUTTON_NB; i++) {
+		if (digitalRead(buttonPins[i])) {
+			newMask &= ~buttonMsks[i];
+		} else {
+			newMask |= buttonMsks[i];
+		}
+	}
+//	Serial.println(newMask);
+	return newMask;
+}
+
+byte readButtons() {
+	byte newMask = readButtonState();
+	if (newMask != buttonPressed) {
+		delay(50);
+		newMask = readButtonState();
+		if (newMask != buttonPressed) {
+			byte result = 0;
+			for (byte i = 0; i < BUTTON_NB; i++) {
+				if ((newMask & buttonMsks[i]) && !(buttonPressed & buttonMsks[i])) {
+					result |= buttonMsks[i];
+				}
+			}
+			buttonPressed = newMask;
+			return result;
+		}
+	}
+	return 0;
+}
+
+#ifdef USE_COMPARATOR
+volatile long comparatorRise = 0;
+ISR(ANALOG_COMP_vect) {
+	comparatorRise++;
+}
+#endif
+
+void printPad(int value) {
+	int abs = value < 0 ? -value : value;
+
+	if (abs<10) {
+		Serial.print("      ");
+	} else if (abs < 100) {
+		Serial.print("     ");
+	} else if (abs < 1000) {
+		Serial.print("    ");
+	} else if (abs < 10000) {
+		Serial.print("   ");
+	} else {
+		Serial.print("  ");
+	}
+	Serial.print(value < 0 ? '-' : ' ');
+	Serial.print(abs);
+}
+
+#ifdef USE_ADC_WITH_INTERRUPT
+// F_CPU = 16M => 8KHz = 125 timer ticks with 16 prescaler , or 250 with /8
+// => TIMER2 + TIMER2_COMPA_vect
+
+#define SAMPLES 128
+volatile double vReal[SAMPLES];
+double vImag[SAMPLES];
+volatile int bufferIndex;
+
+ISR(TIMER1_COMPA_vect) {
+	if (bufferIndex == SAMPLES) {
+//		bufferIndex=0;
+		TIMSK1 &= ~(1 << OCIE1A);
+	} else {
+		vReal[bufferIndex++] = analogRead(A0);
+	}
+}
+
+// from https://github.com/kosme/arduinoFFT/blob/master/Examples/FFT_01/FFT_01.ino
+#include "arduinoFFT.h"
+arduinoFFT FFT = arduinoFFT(); /* Create FFT object */
+
+#define SCL_INDEX 0x00
+#define SCL_TIME 0x01
+#define SCL_FREQUENCY 0x02
+#define SCL_PLOT 0x03
+
+const double samplingFrequency = 8000.0;
+
+void PrintVector(double *vData, uint16_t bufferSize, uint8_t scaleType)
+{
+  for (uint16_t i = 0; i < bufferSize; i++)
+  {
+    double abscissa;
+    /* Print abscissa value */
+    switch (scaleType)
+    {
+      case SCL_INDEX:
+        abscissa = (i * 1.0);
+	break;
+      case SCL_TIME:
+        abscissa = ((i * 1.0) / samplingFrequency);
+	break;
+      case SCL_FREQUENCY:
+        abscissa = ((i * 1.0 * samplingFrequency) / SAMPLES);
+	break;
+    }
+    Serial.print(abscissa, 6);
+    if(scaleType==SCL_FREQUENCY)
+      Serial.print("Hz");
+    Serial.print(" ");
+    Serial.println(vData[i], 4);
+  }
+  Serial.println();
+}
+
+#endif
+
+void setup() {
+	Serial.begin(DEFAULT_BAUDRATE);
+
+	pinMode(13, OUTPUT);
+	digitalWrite(13, LOW);
+
+	// OC1A, for testing
+	pinMode(9, OUTPUT);
+
+	pinMode(A0, INPUT);
+	setupButtons();
+
+#ifdef USE_COMPARATOR
+	/**
+	 * analog comparator :
+	 * ref voltage = AIN1 = D7
+	 * input = AIN0 = D6
+	 * ACME = 0 (= use AIN1) => ADCSRB |= 0x04
+	 * ACSR = 00xx0011 = 0x03
+	 *   ACD = 0
+	 *   ACBG= 0
+	 *   ACO = output (rd)
+	 *   ACI = interrupt (rd)
+	 *   ACIE = interrupt enable => 1  (/!\ + I=1 in Status register SREG |= 0x80)
+	 *   ACIC = capture enable -> timer ??? => 0
+	 *   ACIS1,0 : 11 for interrupt on rising
+	 * DIDR1 => bit 0+1 = 1 to disable digital input => |=0x3
+	 */
+	ADCSRB |= 0x04;
+	ACSR = 0x0B;
+	DIDR1 |= 0x03;
+#endif
+
+#ifdef USE_ADC_WITH_INTERRUPT
+	// prepare timer1 setup : OCRA = 250 , prescale 8 , no output, reset on OCRA
+	TCCR1A = 0x40; // 0x00;
+	TCCR1B = 0x0A;
+//	TCCR1C = 0x80;
+	TIMSK1 = 0;
+	writeReg16(OCR1A, 249);
+#endif
+//	Serial.print("PRR = ");
+//	Serial.println(PRR, HEX);
+	Serial.println("setup ok");
+	Serial.print("OCR1A = ");
+	word ocr1a;
+	readReg16(ocr1a, OCR1A);
+	Serial.println(ocr1a);
+}
+
+void loop() {
+	byte buttons = readButtons();
+//	if (buttons != 0) {
+//		Serial.print("=> ");
+//		Serial.println(buttons);
 //	}
-//	if (convertedKeys & 0x08) {
-//		tone(BIP_PIN, 880, 50);
-//		delay(1000);
-//	}
-//	if (convertedKeys & 0x04) {
-//		tone(BIP_PIN, 220, 500);
-//		delay(1000);
-//	}
+
+	if (buttons & buttonMsks[1]) {
+		Serial.println("tone ...");
+		tone(SPEAKER_PIN, 440, 2000);
+	}
+
+	if (buttons & buttonMsks[0]) {
+#ifdef USE_COMPARATOR
+		Serial.println("reading comparator ...");
+		comparatorRise = 0;
+		ACSR |= 1 << ACIE;
+		delay(1000);
+		ACSR &= ~(1 << ACIE);
+		Serial.print("comparatorRise = ");
+		Serial.println(comparatorRise);
+#endif
+
+#ifdef USE_ADC_WITH_LOOP
+		Serial.println("reading ADC ...");
+		long start = millis();
+		for(int i=0; i<INPUT_LEN; i++) {
+			inputs[i] = analogRead(A0);
+		}
+		Serial.print("Took ");
+		Serial.println(millis() - start);
+
+		long total = 0;
+		for(int i=0; i<INPUT_LEN; i++) {
+			total += inputs[i];
+		}
+		int avg = total / INPUT_LEN;
+		Serial.print("AVG = ");
+		Serial.println(avg);
+
+		for(int i=0; i<INPUT_LEN; i++) {
+			printPad(avg - inputs[i]);
+			if (i % 20 == 19) {
+				Serial.println();
+			}
+		}
+#endif
+
+#ifdef USE_ADC_WITH_INTERRUPT
+		bufferIndex = 0;
+		long start = millis();
+		digitalWrite(13, HIGH);
+
+		// enable timer and interruption
+		writeReg16(TCNT1, 0);
+		TIMSK1 |= 1 << OCIE1A;
+		// wait for bufferIndex == SAMPLES
+		while (bufferIndex != SAMPLES);
+		word cnt;
+		readReg16(cnt, TCNT1);
+
+		digitalWrite(13, LOW);
+		Serial.print("Took ");
+		Serial.println(millis() - start);
+		Serial.print("TCNT1 ended at ");
+		Serial.println(cnt);
+
+		for (int i = 0; i < SAMPLES; i++) {
+			vImag[i] = 0.0;
+		}
+		FFT.Windowing((double *)vReal, SAMPLES, FFT_WIN_TYP_HAMMING, FFT_FORWARD);	/* Weigh data */
+//		Serial.println("Weighed data:");
+//		PrintVector((double *)vReal, SAMPLES, SCL_TIME);
+		FFT.Compute((double *)vReal, vImag, SAMPLES, FFT_FORWARD); /* Compute FFT */
+//		Serial.println("Computed Real values:");
+//		PrintVector((double *)vReal, SAMPLES, SCL_INDEX);
+//		Serial.println("Computed Imaginary values:");
+//		PrintVector(vImag, SAMPLES, SCL_INDEX);
+		FFT.ComplexToMagnitude((double *)vReal, vImag, SAMPLES); /* Compute magnitudes */
+//		Serial.println("Computed magnitudes:");
+//		PrintVector((double *)vReal, (SAMPLES >> 1), SCL_FREQUENCY);
+		double x = FFT.MajorPeak((double *)vReal, SAMPLES, samplingFrequency);
+		Serial.print("Computed MajorPeak : ");
+		Serial.println(x, 6);
+
+		char *name;
+		int error,octave;
+		getNote(x, &name, &octave, &error);
+		Serial.print(" => "); Serial.print(name);
+		Serial.print(" ["); Serial.print(octave); Serial.print("] ~ ");
+		Serial.println(error);
+#endif
+	}
 
 }
+#endif

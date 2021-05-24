@@ -1,4 +1,5 @@
 BOARD := arduino:avr:uno
 PORT := /dev/ttyUSB0
-#LIBRARY_PATH := /path/to/library1 /path/to/library2
-ARDDUDE_OPTIONS := -l cr -o raw -d
+LIBRARY_PATH := /home/pif/GitHub/piif/ArduinoTools /home/pif/GitHub/kosme/arduinoFFT
+#/target/uno/libArduinoTools.a
+ARDDUDE_OPTIONS := -l lf -o raw -d
